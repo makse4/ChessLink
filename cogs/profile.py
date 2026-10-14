@@ -9,8 +9,13 @@ from chess_api import APIError
 from db import Link
 
 PLATFORMS = {"lichess": "♞ Lichess", "chesscom": "♟ Chess.com"}
-LICHESS_MODES = [("bullet", "Bullet"), ("blitz", "Blitz"), ("rapid", "Rapid"), ("classical", "Classical")]
-CHESSCOM_MODES = [("chess_bullet", "Bullet"), ("chess_blitz", "Blitz"), ("chess_rapid", "Rapid"), ("chess_daily", "Daily")]
+LICHESS_MODES = [("bullet", "Bullet", "⚡"), ("blitz", "Blitz", "🔥"), ("rapid", "Rapid", "⏱️"), ("classical", "Classical", "🕰️")]
+CHESSCOM_MODES = [
+    ("chess_bullet", "Bullet", "⚡"),
+    ("chess_blitz", "Blitz", "🔥"),
+    ("chess_rapid", "Rapid", "⏱️"),
+    ("chess_daily", "Daily", "📅"),
+]
 ACCENT = discord.Colour.from_rgb(212, 175, 55)
 
 
@@ -21,10 +26,37 @@ class ProfileSection:
     best: int | None = None
 
 
-def _rating_block(rows: list[tuple[str, str]]) -> str:
-    width = max(len(label) for label, _ in rows)
-    body = "\n".join(f"{label:<{width}}  {value}" for label, value in rows)
-    return f"```\n{body}\n```"
+@dataclass(frozen=True)
+class Rating:
+    icon: str
+    label: str
+    rating: int
+    provisional: bool = False
+    peak: int | None = None
+
+
+def _rating_lines(ratings: list[Rating]) -> str:
+    if not ratings:
+        return "*No rated games yet*"
+
+    top = max(r.rating for r in ratings)
+    lines = []
+    for r in ratings:
+        value = f"{r.rating}{'?' if r.provisional else ''}"
+        if r.rating == top:
+            value = f"**{value}**"
+        line = f"{r.icon} {r.label} · {value}"
+        if r.peak:
+            line += f" *(peak {r.peak})*"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _stats_lines(games: int, wins: int, losses: int, draws: int) -> str:
+    return (
+        f"⚔️ **{games:,}** games\n"
+        f"✅ **{wins:,}** wins · ❌ **{losses:,}** losses · ➖ **{draws:,}** draws"
+    )
 
 
 class Profile(commands.Cog):
@@ -57,12 +89,12 @@ class Profile(commands.Cog):
         rated = [s for s in sections if s.best is not None]
         if rated:
             top = max(rated, key=lambda s: s.best)
-            embed.description = f"Top rating **{top.best}** on {top.name}"
+            embed.description = f"📊 Top rating **{top.best}** on {top.name}"
 
         for section in sections:
             embed.add_field(name=section.name, value=section.value, inline=True)
 
-        embed.set_footer(text="ChessLink · verified ownership", icon_url=self.bot.user.display_avatar.url)
+        embed.set_footer(text="ChessLink · ✅ Verified ownership", icon_url=self.bot.user.display_avatar.url)
         return embed
 
     async def _section(self, link: Link) -> ProfileSection:
@@ -88,29 +120,30 @@ class Profile(commands.Cog):
             return self._missing(link)
 
         title = f"{data['title']} " if data.get("title") else ""
-        rows = []
-        best = None
-        for key, label in LICHESS_MODES:
+        ratings = []
+        for key, label, icon in LICHESS_MODES:
             perf = data.get("perfs", {}).get(key)
             if perf and perf.get("games", 0) > 0:
-                provisional = "?" if perf.get("prov") else ""
-                rows.append((label, f"{perf['rating']}{provisional}"))
-                best = max(best or 0, perf["rating"])
+                ratings.append(Rating(icon, label, perf["rating"], bool(perf.get("prov"))))
 
         count = data.get("count", {})
-        lines = [
-            f"**[{title}{data['username']}]({data['url']})**",
-            _rating_block(rows) if rows else "*No rated games yet*",
-            f"{count.get('all', 0):,} games · {count.get('win', 0):,} W · "
-            f"{count.get('loss', 0):,} L · {count.get('draw', 0):,} D",
-        ]
+        header = [f"**[{title}{data['username']}]({data['url']})**"]
+        location = data.get("profile", {}).get("location")
+        if location:
+            header.append(f"📍 {location}")
 
-        dates = [f"Joined <t:{data['createdAt'] // 1000}:D>"]
+        dates = [f"📅 Joined <t:{data['createdAt'] // 1000}:D>"]
         if "seenAt" in data:
-            dates.append(f"Seen <t:{data['seenAt'] // 1000}:D>")
-        lines.append(" · ".join(dates))
+            dates.append(f"👁️ Seen <t:{data['seenAt'] // 1000}:D>")
 
-        return ProfileSection(PLATFORMS["lichess"], "\n".join(lines), best)
+        blocks = [
+            "\n".join(header),
+            _rating_lines(ratings),
+            _stats_lines(count.get("all", 0), count.get("win", 0), count.get("loss", 0), count.get("draw", 0)),
+            "\n".join(dates),
+        ]
+        best = max((r.rating for r in ratings), default=None)
+        return ProfileSection(PLATFORMS["lichess"], "\n\n".join(blocks), best)
 
     async def _chesscom_section(self, link: Link) -> ProfileSection:
         player = await self.bot.chesscom.player(link.account)
@@ -120,39 +153,36 @@ class Profile(commands.Cog):
         stats = await self.bot.chesscom.stats(link.account)
 
         title = f"{player['title']} " if player.get("title") else ""
-        rows = []
-        best = None
+        ratings = []
         wins = losses = draws = 0
-        for key, label in CHESSCOM_MODES:
+        for key, label, icon in CHESSCOM_MODES:
             mode = stats.get(key)
             if not mode or "last" not in mode:
                 continue
-            rating = mode["last"]["rating"]
-            peak = mode.get("best", {}).get("rating")
-            value = f"{rating}" + (f"  (peak {peak})" if peak else "")
-            rows.append((label, value))
-            best = max(best or 0, rating)
-
+            ratings.append(
+                Rating(icon, label, mode["last"]["rating"], peak=mode.get("best", {}).get("rating"))
+            )
             record = mode.get("record", {})
             wins += record.get("win", 0)
             losses += record.get("loss", 0)
             draws += record.get("draw", 0)
 
-        lines = [
-            f"**[{title}{player['username']}]({player['url']})**",
-            _rating_block(rows) if rows else "*No rated games yet*",
-        ]
+        header = [f"**[{title}{player['username']}]({player['url']})**"]
+        if player.get("location"):
+            header.append(f"📍 {player['location']}")
 
+        dates = [f"📅 Joined <t:{player['joined']}:D>"]
+        if "last_online" in player:
+            dates.append(f"👁️ Seen <t:{player['last_online']}:D>")
+
+        blocks = ["\n".join(header), _rating_lines(ratings)]
         total = wins + losses + draws
         if total:
-            lines.append(f"{total:,} games · {wins:,} W · {losses:,} L · {draws:,} D")
+            blocks.append(_stats_lines(total, wins, losses, draws))
+        blocks.append("\n".join(dates))
 
-        dates = [f"Joined <t:{player['joined']}:D>"]
-        if "last_online" in player:
-            dates.append(f"Seen <t:{player['last_online']}:D>")
-        lines.append(" · ".join(dates))
-
-        return ProfileSection(PLATFORMS["chesscom"], "\n".join(lines), best)
+        best = max((r.rating for r in ratings), default=None)
+        return ProfileSection(PLATFORMS["chesscom"], "\n\n".join(blocks), best)
 
 
 async def setup(bot):
