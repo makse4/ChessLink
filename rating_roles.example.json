@@ -1,0 +1,10 @@
+{
+  "123456789012345678": {
+    "modes": ["blitz", "rapid", "classical", "daily"],
+    "tiers": [
+      {"role_id": 111111111111111111, "min_rating": 1000},
+      {"role_id": 222222222222222222, "min_rating": 1500},
+      {"role_id": 333333333333333333, "min_rating": 2000}
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+rating_roles.json
+chesslink.db
+.venv
+__pycache__
+
+# Python
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# SQLite (database, WAL/journal files, and backups made with sqlite3 .backup)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
